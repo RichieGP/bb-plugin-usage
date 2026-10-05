@@ -1487,6 +1487,24 @@ describe("OpenCode Go limits", () => {
       .toEqual({ status: "ok", error: null, hasSuccess: 1 });
   });
 
+  it("appends z.ai credit windows to the Go windows and survives a z.ai failure", async () => {
+    const zaiOutput = `__BB_ZAI_BEGIN__\n${JSON.stringify({ data: { limits: [{ type: "CREDIT_LIMIT", unit: 3, number: 5, percentage: 7, nextResetTime: 1791190276506 }] } })}\n__BB_ZAI_END__\n`;
+    const bb = { log: { info: vi.fn(), warn: vi.fn(), debug: vi.fn() } } as unknown as BbPluginApi;
+    const labelsFor = async (executor: (command: string) => Promise<string>) => {
+      const db = goLimitsDb();
+      await syncOpenCodeGo(bb, db as unknown as ReturnType<BbPluginApi["storage"]["database"]>, { id: "host-1", name: "Machine" }, new AbortController().signal,
+        async (_bb, _machine, command) => executor(command));
+      const row = db.prepare("SELECT windows_json FROM opencode_go_limits").get() as { windows_json: string };
+      return (JSON.parse(row.windows_json) as Array<{ label: string }>).map((window) => window.label);
+    };
+    expect(await labelsFor(async (command) => (command.includes("__BB_ZAI_BEGIN__") ? zaiOutput : markedOutput)))
+      .toEqual(["Rolling (5h)", "z.ai 5-hour credits"]);
+    expect(await labelsFor(async (command) => {
+      if (command.includes("__BB_ZAI_BEGIN__")) throw new Error("host unavailable");
+      return markedOutput;
+    })).toEqual(["Rolling (5h)"]);
+  });
+
   it("persists the credential fingerprint as the grouping identity", async () => {
     const db = goLimitsDb();
     const bb = { log: { info: vi.fn(), warn: vi.fn(), debug: vi.fn() } } as unknown as BbPluginApi;

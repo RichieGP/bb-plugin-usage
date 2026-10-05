@@ -9,6 +9,7 @@ import {
 } from "./collectors";
 import { activateCachedCatalog, refreshCatalog } from "./lib/catalog";
 import { openCodeGoUsageCommand, extractOpenCodeGoFingerprint, parseOpenCodeGoUsage } from "./lib/opencode-go";
+import { parseZaiQuota, zaiQuotaCommand } from "./lib/zai-limits";
 import {
   compressedHostJsonCollectorScript,
   extractHostJsonScan,
@@ -853,9 +854,20 @@ export async function syncOpenCodeGo(
       title: "Usage: OpenCode Go limits",
       timeoutMs: OPENCODE_GO_SYNC_TIMEOUT_MS,
     });
-    const windows = parseOpenCodeGoUsage(extractOpenCodeJson(output));
-    if (windows.length === 0) throw new Error("OpenCode Go usage response contained no limit windows.");
+    const goWindows = parseOpenCodeGoUsage(extractOpenCodeJson(output));
+    if (goWindows.length === 0) throw new Error("OpenCode Go usage response contained no limit windows.");
     const fingerprint = extractOpenCodeGoFingerprint(output);
+    // z.ai credits ride along with the Go windows; any failure here is ignored.
+    let zaiWindows: ReturnType<typeof parseZaiQuota> = [];
+    try {
+      zaiWindows = parseZaiQuota(await executeHostCommand(bb, machine, zaiQuotaCommand(), signal, {
+        title: "Usage: z.ai credits",
+        timeoutMs: OPENCODE_GO_SYNC_TIMEOUT_MS,
+      }));
+    } catch (error) {
+      bb.log.debug(`${machine.name}/zai: skipped (${errorMessage(error)})`);
+    }
+    const windows = [...goWindows, ...zaiWindows];
 
     db.transaction(() => {
       if (goLimitsHasFingerprintColumn(db)) {
